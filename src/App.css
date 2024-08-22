@@ -1,0 +1,36 @@
+.finger-visualization {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 20px;
+}
+
+.hand {
+    display: flex;
+    flex-direction: row;
+    gap: 10px;
+}
+
+.left-hand {
+    flex-direction: row-reverse;
+
+}
+
+.finger {
+    width: 40px;
+    height: 40px;
+    background-color: blue;
+    transition: border-radius 0.3s ease;
+}
+
+.finger.open {
+    border-radius: 0;
+    /* 方形 */
+    background-color: blue;
+
+}
+
+.finger.closed {
+    border-radius: 50%;
+    /* 圆形 */
+    background-color: red;
+}
