@@ -3,6 +3,8 @@ import { Hands, HAND_CONNECTIONS } from "@mediapipe/hands";
 import { Camera } from "@mediapipe/camera_utils";
 import { drawConnectors, drawLandmarks } from "@mediapipe/drawing_utils";
 import "./App.css";
+import { connectMqtt, sendMessage, disconnectMqtt } from "./utils/mqttClient";
+
 const HandGestureRecognizer = () => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -154,9 +156,47 @@ const HandGestureRecognizer = () => {
 };
 
 function App() {
+  const [message, setMessage] = useState(""); // 用于保存输入框中的消息
+
+  useEffect(() => {
+    // 组件加载时连接到 MQTT 服务器
+    connectMqtt();
+
+    // 组件卸载时断开连接
+    return () => {
+      disconnectMqtt(); // 在组件卸载时断开 MQTT 连接
+    };
+  }, []);
+
+  // 处理输入框变化
+  const handleInputChange = (e) => {
+    setMessage(e.target.value); // 更新输入框中的值
+  };
+
+  // 处理发送按钮点击事件
+  const handleSendMessage = () => {
+    if (message.trim() !== "") {
+      sendMessage("name", message); // 发送消息到 'name' 主题
+      setMessage(""); // 清空输入框
+    } else {
+      console.log("输入框为空，无法发送消息");
+    }
+  };
+
   return (
     <div className="App">
-      <HandGestureRecognizer />
+      <div>
+        <div>
+          <input
+            type="text"
+            value={message}
+            onChange={handleInputChange}
+            placeholder="Enter your message"
+          />
+          <button onClick={handleSendMessage}>Send Message</button>
+        </div>
+        <HandGestureRecognizer />
+      </div>
     </div>
   );
 }
