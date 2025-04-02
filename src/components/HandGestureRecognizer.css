@@ -1,0 +1,53 @@
+/* 手势识别组件样式 */
+
+/* 连接状态指示器 */
+.connection-status {
+  margin-bottom: 10px;
+  text-align: center;
+}
+
+.status-indicator {
+  display: inline-block;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-weight: bold;
+  color: white;
+}
+
+.status-indicator.connected {
+  background-color: #4CAF50; /* 绿色表示已连接 */
+}
+
+.status-indicator.disconnected {
+  background-color: #F44336; /* 红色表示未连接 */
+}
+
+/* 手指可视化 */
+.finger-visualization {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 15px;
+}
+
+.hand {
+  display: flex;
+  margin: 0 15px;
+}
+
+.finger {
+  width: 20px;
+  height: 40px;
+  margin: 0 5px;
+  border-radius: 5px;
+  transition: all 0.3s ease;
+}
+
+.finger.open {
+  background-color: #4CAF50;
+  height: 40px;
+}
+
+.finger.closed {
+  background-color: #F44336;
+  height: 20px;
+}

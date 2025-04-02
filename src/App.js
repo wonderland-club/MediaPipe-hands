@@ -1,166 +1,32 @@
-import React, { useEffect, useRef, useState } from "react";
-import { Hands, HAND_CONNECTIONS } from "@mediapipe/hands";
-import { Camera } from "@mediapipe/camera_utils";
-import { drawConnectors, drawLandmarks } from "@mediapipe/drawing_utils";
+import React, { useEffect, useRef } from "react";
 import "./App.css";
-import { connectMqtt, sendMessage, disconnectMqtt } from "./utils/mqttClient";
+import { connectMqtt, disconnectMqtt } from "./utils/mqttClient";
+import HandGestureRecognizer from "./components/HandGestureRecognizer";
+import MessageInput from "./components/MessageInput";
+import VideoPlayer from "./components/VideoPlayer";
 
-const HandGestureRecognizer = () => {
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-
-  // 初始化状态，存储左右手每根手指是否张开的状态
-  const [leftHandFingers, setLeftHandFingers] = useState({
-    thumb: false,
-    index: false,
-    middle: false,
-    ring: false,
-    pinky: false,
-  });
-  const [rightHandFingers, setRightHandFingers] = useState({
-    thumb: false,
-    index: false,
-    middle: false,
-    ring: false,
-    pinky: false,
-  });
-
-  useEffect(() => {
-    if (videoRef.current && canvasRef.current) {
-      const hands = new Hands({
-        locateFile: (file) =>
-          `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
-      });
-
-      hands.setOptions({
-        maxNumHands: 2,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-      });
-
-      hands.onResults(onResults);
-
-      const camera = new Camera(videoRef.current, {
-        onFrame: async () => {
-          await hands.send({ image: videoRef.current });
-        },
-        width: 1280,
-        height: 720,
-      });
-      camera.start();
-    }
-  }, []);
-
-  function onResults(results) {
-    const canvasCtx = canvasRef.current.getContext("2d");
-    canvasCtx.save();
-    canvasCtx.clearRect(
-      0,
-      0,
-      canvasRef.current.width,
-      canvasRef.current.height
-    );
-    canvasCtx.drawImage(
-      results.image,
-      0,
-      0,
-      canvasRef.current.width,
-      canvasRef.current.height
-    );
-
-    if (results.multiHandLandmarks) {
-      results.multiHandLandmarks.forEach((landmarks, i) => {
-        const handedness = results.multiHandedness[i].label; // 左手或右手
-        drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {
-          color: "#00FF00",
-          lineWidth: 5,
-        });
-        drawLandmarks(canvasCtx, landmarks, {
-          color: "#FF0000",
-          lineWidth: 2,
-        });
-
-        detectFingers(landmarks, handedness);
-      });
-    }
-    canvasCtx.restore();
-  }
-
-  function detectFingers(landmarks, handLabel) {
-    const fingerJoints = {
-      thumb: [1, 2, 4],
-      index: [5, 6, 8],
-      middle: [9, 10, 12],
-      ring: [13, 14, 16],
-      pinky: [17, 18, 20],
-    };
-
-    const newFingerStates = {};
-
-    for (let finger in fingerJoints) {
-      const [base, pip, tip] = fingerJoints[finger].map(
-        (index) => landmarks[index]
-      );
-
-      if (finger === "thumb") {
-        // 对于右手拇指，基于X轴的判断
-        if (handLabel === "Right") {
-          newFingerStates[finger] = base.x > tip.x;
-        }
-        // 对于左手拇指，基于X轴的判断相反
-        else if (handLabel === "Left") {
-          newFingerStates[finger] = base.x < tip.x;
-        }
-      } else {
-        // 其他手指仍基于Y轴的标准判断
-        newFingerStates[finger] = tip.y < pip.y && pip.y < base.y;
-      }
-    }
-
-    if (handLabel === "Left") {
-      setLeftHandFingers(newFingerStates);
-    } else if (handLabel === "Right") {
-      setRightHandFingers(newFingerStates);
-    }
-  }
-
-  return (
-    <div>
-      <div className="finger-visualization">
-        <div className="hand left-hand">
-          {Object.keys(leftHandFingers).map((finger) => (
-            <div
-              key={finger}
-              className={`finger ${
-                leftHandFingers[finger] ? "open" : "closed"
-              }`}
-            />
-          ))}
-        </div>
-        <div className="hand right-hand">
-          {Object.keys(rightHandFingers).map((finger) => (
-            <div
-              key={finger}
-              className={`finger ${
-                rightHandFingers[finger] ? "open" : "closed"
-              }`}
-            />
-          ))}
-        </div>
-      </div>
-      <video ref={videoRef} style={{ display: "none" }} />
-      <canvas ref={canvasRef} width={1280} height={720} />
-    </div>
-  );
-};
-
+/**
+ * 主应用组件
+ * 负责整合所有子组件并管理应用状态
+ */
 function App() {
-  const [message, setMessage] = useState(""); // 用于保存输入框中的消息
+  // 添加播放视频的 ref
+  const playbackVideoRef = useRef(null);
 
   useEffect(() => {
     // 组件加载时连接到 MQTT 服务器
-    connectMqtt();
+    connectMqtt(
+      // 连接成功回调
+      () => {
+        console.log("MQTT连接成功，应用已准备就绪");
+      },
+      // 消息接收回调
+      (topic, message) => {
+        console.log(`收到来自主题 ${topic} 的消息: ${message}`);
+      }
+    ).catch((error) => {
+      console.error("MQTT连接失败:", error);
+    });
 
     // 组件卸载时断开连接
     return () => {
@@ -168,35 +34,31 @@ function App() {
     };
   }, []);
 
-  // 处理输入框变化
-  const handleInputChange = (e) => {
-    setMessage(e.target.value); // 更新输入框中的值
-  };
-
-  // 处理发送按钮点击事件
-  const handleSendMessage = () => {
-    if (message.trim() !== "") {
-      sendMessage("name", message); // 发送消息到 'name' 主题
-      setMessage(""); // 清空输入框
-    } else {
-      console.log("输入框为空，无法发送消息");
-    }
-  };
-
   return (
     <div className="App">
-      <div>
-        <div>
-          <input
-            type="text"
-            value={message}
-            onChange={handleInputChange}
-            placeholder="Enter your message"
-          />
-          <button onClick={handleSendMessage}>Send Message</button>
-        </div>
-        <HandGestureRecognizer />
-      </div>
+      <main className="App-main">
+        <section
+          className="video-section"
+          style={{ display: "flex", justifyContent: "center", alignItems: "center" }}
+        >
+          {/* 修改：添加内联样式使视频居中 */}
+          <div className="video-container" style={{ display: "flex", justifyContent: "center" }}>
+            {/* 使用VideoPlayer组件替代直接的video标签，并禁用所有手动控制 */}
+            <VideoPlayer
+              videoSrc={process.env.PUBLIC_URL + "/videos/songyuqi.mp4"}
+              videoRef={playbackVideoRef}
+              controls={false}  // 禁用手动控制（隐藏音量、暂停、播放等按钮）
+              loop={true}
+              onVideoRefChange={() => console.log("视频引用已更新")}
+            />
+          </div>
+        </section>
+
+        <section className="gesture-section">
+          {/* 传入 playbackVideoRef 以实现手势控制视频播放 */}
+          <HandGestureRecognizer videoPlaybackRef={playbackVideoRef} />
+        </section>
+      </main>
     </div>
   );
 }
