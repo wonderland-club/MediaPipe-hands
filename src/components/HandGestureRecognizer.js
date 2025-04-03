@@ -268,8 +268,8 @@ const HandGestureRecognizer = ({ videoPlaybackRef }) => {
           ))}
         </div>
       </div>
-      <video ref={videoRef} style={{ display: "none" }} />
-      <canvas ref={canvasRef} width={1280} height={720} />
+      <video ref={videoRef} style={{ display: "none", transform: "scaleX(-1)" }} />
+      <canvas ref={canvasRef} width={1280} height={720} style={{ transform: "scaleX(-1)" }} />
     </div>
   );
 };
