@@ -5,266 +5,171 @@ import { drawConnectors, drawLandmarks } from "@mediapipe/drawing_utils";
 import { sendMessage, isConnected } from "../utils/mqttClient";
 import "./HandGestureRecognizer.css";
 
-/**
- * 手势识别组件
- * 负责识别手势并触发相应的事件
- * @param {Object} props - 组件属性
- * @param {React.RefObject} props.videoPlaybackRef - 视频播放元素的引用
- */
+// 全局常量：手指关键关节索引
+const FINGER_JOINTS = {
+  thumb: [1, 2, 4],
+  index: [5, 6, 8],
+  middle: [9, 10, 12],
+  ring: [13, 14, 16],
+  pinky: [17, 18, 20],
+};
+
+// 手势识别组件：处理摄像头数据、绘图和手势事件
 const HandGestureRecognizer = ({ videoPlaybackRef }) => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const [mqttConnected, setMqttConnected] = useState(isConnected());
-
-  // 初始化状态，存储左右手每根手指是否张开的状态
-  const [leftHandFingers, setLeftHandFingers] = useState({
-    thumb: false,
-    index: false,
-    middle: false,
-    ring: false,
-    pinky: false,
-  });
-  const [rightHandFingers, setRightHandFingers] = useState({
-    thumb: false,
-    index: false,
-    middle: false,
-    ring: false,
-    pinky: false,
-  });
-  const [prevThumbState, setPrevThumbState] = useState({
-    left: false,
-    right: false
-  });
-
-  // 用 useRef 存储上一次左右手的整体状态
-  const prevHandAggregate = useRef({
-    left: { allOpen: false, allClosed: false },
-    right: { allOpen: false, allClosed: false },
-  });
   
-  // 用 useRef 存储两只手总体的状态，防止重复发送消息
+  const [mqttConnected, setMqttConnected] = useState(isConnected());
+  const [rightHandFingers, setRightHandFingers] = useState({ thumb: null, index: null, middle: null, ring: null, pinky: null });
+  const [leftHandFingers, setLeftHandFingers] = useState({ thumb: null, index: null, middle: null, ring: null, pinky: null });
+  const [prevThumbState, setPrevThumbState] = useState({ right: false, left: false });
+  
+  // 保存上次整体状态，防止重复消息
+  const prevHandAggregate = useRef({ right: { allOpen: false, allClosed: false }, left: { allOpen: false, allClosed: false } });
   const prevBothAggregate = useRef({ allOpen: false, allClosed: false });
 
-  // 定期检查MQTT连接状态
+  // 定时检测 MQTT 连接状态
   useEffect(() => {
-    const checkConnectionInterval = setInterval(() => {
-      setMqttConnected(isConnected());
-    }, 2000); // 每2秒检查一次连接状态
-    
-    return () => {
-      clearInterval(checkConnectionInterval);
-    };
+    const timer = setInterval(() => setMqttConnected(isConnected()), 2000);
+    return () => clearInterval(timer);
   }, []);
 
+  // 初始化 MediaPipe Hands
   useEffect(() => {
     if (videoRef.current && canvasRef.current) {
-      const hands = new Hands({
-        locateFile: (file) =>
-          `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
-      });
+      const hands = new Hands({ locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+      hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+      hands.onResults(handleResults);
 
-      hands.setOptions({
-        maxNumHands: 2,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-      });
-
-      hands.onResults(onResults);
-
-      const camera = new Camera(videoRef.current, {
-        onFrame: async () => {
-          await hands.send({ image: videoRef.current });
-        },
-        width: 1280,
-        height: 720,
+      const camera = new Camera(videoRef.current, { 
+        onFrame: async () => await hands.send({ image: videoRef.current }), 
+        width: 1280, height: 720 
       });
       camera.start();
-
-      // 清理函数
-      return () => {
-        camera.stop();
-      };
+      return () => camera.stop();
     }
   }, []);
 
-  /**
-   * 处理MediaPipe手势识别结果
-   * @param {Object} results - MediaPipe识别结果
-   */
-  function onResults(results) {
-    const canvasCtx = canvasRef.current.getContext("2d");
-    canvasCtx.save();
-    canvasCtx.clearRect(
-      0,
-      0,
-      canvasRef.current.width,
-      canvasRef.current.height
-    );
-    canvasCtx.drawImage(
-      results.image,
-      0,
-      0,
-      canvasRef.current.width,
-      canvasRef.current.height
-    );
+  // 处理媒体识别结果：绘制画布、提取左右手数据
+  function handleResults(results) {
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.save();
+    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    ctx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
 
-    if (results.multiHandLandmarks) {
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length) {
+      let leftLandmarks = null, rightLandmarks = null;
       results.multiHandLandmarks.forEach((landmarks, i) => {
-        const handedness = results.multiHandedness[i].label; // 左手或右手
-        drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {
-          color: "#00FF00",
-          lineWidth: 5,
-        });
-        drawLandmarks(canvasCtx, landmarks, {
-          color: "#FF0000",
-          lineWidth: 2,
-        });
-
-        detectFingers(landmarks, handedness);
+        const label = results.multiHandedness[i].label;
+        // 绘制手部图形
+        drawConnectors(ctx, landmarks, HAND_CONNECTIONS, { color: "#00FF00", lineWidth: 5 });
+        drawLandmarks(ctx, landmarks, { color: "#FF0000", lineWidth: 2 });
+        // 镜像处理：MediaPipe "Left" 实际为用户右手，"Right" 为用户左手
+        if (label === "Left") rightLandmarks = landmarks;
+        else if (label === "Right") leftLandmarks = landmarks;
       });
+
+      if (leftLandmarks && rightLandmarks) {
+        updateFingers(leftLandmarks, "Left");
+        updateFingers(rightLandmarks, "Right");
+      } else {
+        // 未同时检测到左右手，重置缺失手的状态
+        if (!rightLandmarks) setRightHandFingers({ thumb: null, index: null, middle: null, ring: null, pinky: null });
+        if (!leftLandmarks)  setLeftHandFingers({ thumb: null, index: null, middle: null, ring: null, pinky: null });
+        prevBothAggregate.current = { allOpen: false, allClosed: false };
+      }
+    } else {
+      // 无手部数据时重置状态
+      setRightHandFingers({ thumb: null, index: null, middle: null, ring: null, pinky: null });
+      setLeftHandFingers({ thumb: null, index: null, middle: null, ring: null, pinky: null });
+      prevBothAggregate.current = { allOpen: false, allClosed: false };
     }
-    canvasCtx.restore();
+    ctx.restore();
   }
 
-  /**
-   * 检测手指状态
-   * @param {Array} landmarks - 手部关键点数据
-   * @param {String} handLabel - 手的标识（Left或Right）
-   */
-  function detectFingers(landmarks, handLabel) {
-    // 定义每个手指关键关节的索引
-    const fingerJoints = {
-      thumb: [1, 2, 4],
-      index: [5, 6, 8],
-      middle: [9, 10, 12],
-      ring: [13, 14, 16],
-      pinky: [17, 18, 20],
-    };
-
-    // 存储本次检测到的手指状态
-    const newFingerStates = {};
-
-    // 判断每个手指是否伸展
-    for (let finger in fingerJoints) {
-      const [base, pip, tip] = fingerJoints[finger].map(index => landmarks[index]);
-
+  // 更新并判断手指状态
+  function updateFingers(landmarks, handLabel) {
+    const newStates = {};
+    // 对每个手指计算状态
+    Object.keys(FINGER_JOINTS).forEach(finger => {
+      const [base, pip, tip] = FINGER_JOINTS[finger].map(i => landmarks[i]);
       if (finger === "thumb") {
-        // 拇指根据左右手方向判断
-        if (handLabel === "Right") {
-          newFingerStates[finger] = base.x > tip.x;
-        } else if (handLabel === "Left") {
-          newFingerStates[finger] = base.x < tip.x;
-        }
+        // 镜像翻转判断：右手时基点.x > 指尖.x 表示张开，左手时相反
+        newStates[finger] = handLabel === "Right" ? base.x > tip.x : base.x < tip.x;
       } else {
-        // 其他手指：末端位于近中节之上且近中节位于基点之上则认为伸展
-        newFingerStates[finger] = tip.y < pip.y && pip.y < base.y;
+        newStates[finger] = tip.y < pip.y && pip.y < base.y;
       }
-    }
+    });
 
-    // 计算当前手的整体状态
-    const allOpen = Object.values(newFingerStates).every(v => v === true);
-    const allClosed = Object.values(newFingerStates).every(v => v === false);
+    const allOpen = Object.values(newStates).every(state => state === true);
+    const allClosed = Object.values(newStates).every(state => state === false);
 
-    if (handLabel === "Left") {
-      setLeftHandFingers(newFingerStates);
-
-      // 检测左手所有手指全部张开（仅首次状态变化时发送）
-      if (allOpen && !prevHandAggregate.current.left.allOpen) {
-        sendMessage("left-all", "Left-All-Open");
-      }
-      // 检测左手所有手指全部合并（仅首次状态变化时发送）
-      if (allClosed && !prevHandAggregate.current.left.allClosed) {
-        sendMessage("left-all", "Left-All-Closed");
-      }
-      setPrevThumbState(prev => ({ ...prev, left: newFingerStates.thumb }));
+    // 根据手标识更新状态并发送MQTT消息（仅首次变化发送）
+    if (handLabel === "Left") { // MediaPipe的Right标签实际为用户左手
+      setLeftHandFingers(newStates);
+      if (allOpen && !prevHandAggregate.current.left.allOpen) sendMessage("left-all", "Left-All-Open");
+      if (allClosed && !prevHandAggregate.current.left.allClosed) sendMessage("left-all", "Left-All-Closed");
+      setPrevThumbState(prev => ({ ...prev, left: newStates.thumb }));
       prevHandAggregate.current.left = { allOpen, allClosed };
-    } else if (handLabel === "Right") {
-      setRightHandFingers(newFingerStates);
-
-      // 检测右手所有手指全部张开
-      if (allOpen && !prevHandAggregate.current.right.allOpen) {
-        sendMessage("right-all", "Right-All-Open");
-      }
-      // 检测右手所有手指全部合并
-      if (allClosed && !prevHandAggregate.current.right.allClosed) {
-        sendMessage("right-all", "Right-All-Closed");
-      }
-      setPrevThumbState(prev => ({ ...prev, right: newFingerStates.thumb }));
+    } else if (handLabel === "Right") { // MediaPipe的Left标签实际为用户右手
+      setRightHandFingers(newStates);
+      if (allOpen && !prevHandAggregate.current.right.allOpen) sendMessage("right-all", "Right-All-Open");
+      if (allClosed && !prevHandAggregate.current.right.allClosed) sendMessage("right-all", "Right-All-Closed");
+      setPrevThumbState(prev => ({ ...prev, right: newStates.thumb }));
       prevHandAggregate.current.right = { allOpen, allClosed };
     }
   }
 
-  // 当左右手状态更新后，检测是否同时满足两只手全部张开或全部合并
+  // 根据左右手状态综合判断播放或暂停视频
   useEffect(() => {
-    const leftAllOpen =
-      Object.keys(leftHandFingers).length > 0 &&
-      Object.values(leftHandFingers).every(v => v === true);
-    const leftAllClosed =
-      Object.keys(leftHandFingers).length > 0 &&
-      Object.values(leftHandFingers).every(v => v === false);
-    const rightAllOpen =
-      Object.keys(rightHandFingers).length > 0 &&
-      Object.values(rightHandFingers).every(v => v === true);
-    const rightAllClosed =
-      Object.keys(rightHandFingers).length > 0 &&
-      Object.values(rightHandFingers).every(v => v === false);
-
-    const bothOpen = leftAllOpen && rightAllOpen;
-    const bothClosed = leftAllClosed && rightAllClosed;
-
-    // 仅在状态首次变化为全部张开时发送事件
-    if (bothOpen && !prevBothAggregate.current.allOpen) {
-      sendMessage("all", "Both-All-Open");
-      prevBothAggregate.current.allOpen = true;
-    } else if (!bothOpen) {
-      prevBothAggregate.current.allOpen = false;
-    }
-
-    // 仅在状态首次变化为全部合并时发送事件
-    if (bothClosed && !prevBothAggregate.current.allClosed) {
-      sendMessage("all", "Both-All-Closed");
-      prevBothAggregate.current.allClosed = true;
-    } else if (!bothClosed) {
-      prevBothAggregate.current.allClosed = false;
-    }
-
-    // 添加视频播放/暂停逻辑
-    if (videoPlaybackRef && videoPlaybackRef.current) {
-      if (bothOpen && videoPlaybackRef.current.paused) {
-        videoPlaybackRef.current.play();
-      } else if (bothClosed && !videoPlaybackRef.current.paused) {
-        videoPlaybackRef.current.pause();
+    const checkHands = (fingers) => Object.values(fingers).filter(v => v !== null);
+    const left = checkHands(leftHandFingers);
+    const right = checkHands(rightHandFingers);
+    if (left.length >= 3 && right.length >= 3) {
+      const leftOpen = left.every(v => v === true);
+      const rightOpen = right.every(v => v === true);
+      const leftClosed = left.every(v => v === false);
+      const rightClosed = right.every(v => v === false);
+      const bothOpen = leftOpen && rightOpen;
+      const bothClosed = leftClosed && rightClosed;
+      
+      if (bothOpen && !prevBothAggregate.current.allOpen) {
+        sendMessage("all", "Both-All-Open");
+        prevBothAggregate.current.allOpen = true;
+        videoPlaybackRef?.current?.paused && videoPlaybackRef.current.play().catch(err => console.log("播放失败:", err));
+      } else if (!bothOpen) {
+        prevBothAggregate.current.allOpen = false;
       }
+      
+      if (bothClosed && !prevBothAggregate.current.allClosed) {
+        sendMessage("all", "Both-All-Closed");
+        prevBothAggregate.current.allClosed = true;
+        videoPlaybackRef?.current?.paused === false && videoPlaybackRef.current.pause();
+      } else if (!bothClosed) {
+        prevBothAggregate.current.allClosed = false;
+      }
+    } else {
+      prevBothAggregate.current = { allOpen: false, allClosed: false };
     }
   }, [leftHandFingers, rightHandFingers, videoPlaybackRef]);
 
   return (
     <div>
       <div className="connection-status">
-        <div className={`status-indicator ${mqttConnected ? 'connected' : 'disconnected'}`}>
-          MQTT状态: {mqttConnected ? '已连接' : '未连接'}
+        <div className={`status-indicator ${mqttConnected ? "connected" : "disconnected"}`}>
+          MQTT状态: {mqttConnected ? "已连接" : "未连接"}
         </div>
       </div>
       <div className="finger-visualization">
+        {/* 左右手显示（UI顺序：左手在左，右手在右） */}
         <div className="hand left-hand">
-          {Object.keys(leftHandFingers).map((finger) => (
-            <div
-              key={finger}
-              className={`finger ${
-                leftHandFingers[finger] ? "open" : "closed"
-              }`}
-            />
+          {Object.keys(leftHandFingers).map(f => (
+            <div key={f} className={`finger ${leftHandFingers[f] === null ? "null" : leftHandFingers[f] ? "open" : "closed"}`} />
           ))}
         </div>
         <div className="hand right-hand">
-          {Object.keys(rightHandFingers).map((finger) => (
-            <div
-              key={finger}
-              className={`finger ${
-                rightHandFingers[finger] ? "open" : "closed"
-              }`}
-            />
+          {Object.keys(rightHandFingers).map(f => (
+            <div key={f} className={`finger ${rightHandFingers[f] === null ? "null" : rightHandFingers[f] ? "open" : "closed"}`} />
           ))}
         </div>
       </div>

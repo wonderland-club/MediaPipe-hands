@@ -51,3 +51,9 @@
   background-color: #F44336;
   height: 20px;
 }
+
+.finger.null {
+  background-color: #9E9E9E;
+  height: 10px;
+  opacity: 0.5;
+}
